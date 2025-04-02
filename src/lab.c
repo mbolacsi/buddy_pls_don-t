@@ -93,7 +93,7 @@ void *buddy_malloc(struct buddy_pool *pool, size_t size)
     }
 
     //Remove from list;
-    struck block *L = pool->avail[j].next;
+    struck avail *L = pool->avail[j].next;
     P = L->next;
     pool->avail[j].next = P;
     L->prev = &pool->avail[k];    
@@ -104,7 +104,7 @@ void *buddy_malloc(struct buddy_pool *pool, size_t size)
         j--;
 
         // Split the block L into two buddies.
-        struct block *R = (struct block *)((char *)L + (UINT64_C(1) << j));
+        struct avail *R = (struct block *)((char *)L + (UINT64_C(1) << j));
 
         // Initialize the right buddy block.
         R->tag = 1;       // mark as free
