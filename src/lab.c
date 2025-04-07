@@ -81,22 +81,23 @@ struct avail *buddy_calc(struct buddy_pool *pool, struct avail *block)
  void *buddy_malloc(struct buddy_pool *pool, size_t size)
  {
      if (size == 0 || pool == NULL) {
-         errno = ENOMEM;  
+         errno = ENOMEM;
          return NULL;
      }
  
-     // Include the avail struct overhead in the size
+     // Calculate the required order to fit size + metadata.
      size_t kval = btok(size + sizeof(struct avail));
  
-     if(kval < SMALLEST_K){
+     // Enforce a minimum block size only if the pool is large enough.
+     if (kval < SMALLEST_K && pool->kval_m >= SMALLEST_K) {
          kval = SMALLEST_K;
      }
  
      size_t j = kval;
      bool block_found = false;
  
-     // Keep searching up through free list until you either find a suitable block, or you've checked every free list up to the largest known one.
-     while (j <= pool->avail[0].kval) {
+     // Search for a free block starting at order 'kval' up to the maximum order.
+     while (j <= pool->kval_m) {
          if (pool->avail[j].next != &pool->avail[j]) {
              block_found = true;
              break;
@@ -109,86 +110,78 @@ struct avail *buddy_calc(struct buddy_pool *pool, struct avail *block)
          return NULL;
      }
  
-     // Remove the block from the free list at level j
+     // Remove the block from the free list.
      struct avail *block = pool->avail[j].next;
      block->prev->next = block->next;
      block->next->prev = block->prev;
-     block->tag = BLOCK_RESERVED; // Mark as allocated
  
-     // Split blocks down to the required size
+     // Split the block until we reach the desired order.
      while (j > kval) {
          j--;
-         // Use buddy_calc to find the buddy block 
-         struct avail *buddy = buddy_calc(pool, block);
+         uintptr_t addr = (uintptr_t)block;
+         uintptr_t buddy_addr = addr + (UINT64_C(1) << j);
+         struct avail *buddy = (struct avail *)buddy_addr;
  
          buddy->tag = BLOCK_AVAIL;
          buddy->kval = j;
  
-         // Insert buddy into the free list
+         // Insert buddy into the free list for order j.
          buddy->next = pool->avail[j].next;
          buddy->prev = &pool->avail[j];
          pool->avail[j].next->prev = buddy;
          pool->avail[j].next = buddy;
+ 
+         // Update the current block's order.
+         block->kval = j;
      }
  
-     return (void *)block;
+     block->tag = BLOCK_RESERVED;
+     // Return a pointer to the usable memory (after the metadata header).
+     return (void *)(block + 1);
  }
  
-
-/**
- * A block of memory previously allocated by a call to malloc,
- * calloc or realloc is deallocated, making it available again
- * for further allocations.
- *
- * @param pool The memory pool
- * @param ptr Pointer to the memory block to free
- */
  void buddy_free(struct buddy_pool *pool, void *ptr)
-{
-    if (!pool || !ptr)
-        return;
-
-    struct avail *block = (struct avail *)ptr;
-    uint64_t kval = block->kval;
-
-    dbg_printf("buddy_free: Freeing block at kval=%zu\n", kval);
-
-    // Mark the block as free.
-    block->tag = BLOCK_AVAIL;
-
-    // Try to merge with its buddy
-    while (kval < MAX_K) {
-        struct avail *buddy = buddy_calc(pool, block);
-
-        // Guard: if buddy_calc returns the same block, break out.
-        if (buddy == block)
-            break;
-
-        // Only merge if buddy is free and has the same order
-        if (!(buddy->tag == BLOCK_AVAIL && buddy->kval == kval))
-            break;
-
-        // Remove buddy from its free list.
-        buddy->prev->next = buddy->next;
-        buddy->next->prev = buddy->prev;
-
-        // Choose the lower address as the base block.
-        if ((uintptr_t)buddy < (uintptr_t)block)
-            block = buddy;
-
-        // Increase the block order.
-        kval++;
-        block->kval = kval;
-
-        dbg_printf("Merging with buddy, new kval=%zu\n", kval);
-    }
-
-    // Reinsert the block into the free list.
-    block->prev = &pool->avail[kval];
-    block->next = pool->avail[kval].next;
-    pool->avail[kval].next->prev = block;
-    pool->avail[kval].next = block;
-}
+ {
+     if (!pool || !ptr)
+         return;
+ 
+     // Adjust pointer back to the metadata header.
+     struct avail *block = (struct avail *)ptr - 1;
+     size_t kval = block->kval;
+ 
+     dbg_printf("buddy_free: Freeing block at kval=%zu\n", kval);
+ 
+     // Mark block as free.
+     block->tag = BLOCK_AVAIL;
+ 
+     // Attempt to merge with buddy as long as we haven't reached the maximum order.
+     while (kval < pool->kval_m) {
+         struct avail *buddy = buddy_calc(pool, block);
+ 
+         // If buddy_calc returns the same block or the buddy isn't free at the same order, stop merging.
+         if (buddy == block || !(buddy->tag == BLOCK_AVAIL && buddy->kval == kval))
+             break;
+ 
+         // Remove buddy from its free list.
+         buddy->prev->next = buddy->next;
+         buddy->next->prev = buddy->prev;
+ 
+         // Use the lower address between the block and its buddy.
+         if ((uintptr_t)buddy < (uintptr_t)block)
+             block = buddy;
+ 
+         kval++;
+         block->kval = kval;
+ 
+         dbg_printf("Merging with buddy, new kval=%zu\n", kval);
+     }
+ 
+     // Reinsert the (possibly merged) block into the free list.
+     block->prev = &pool->avail[kval];
+     block->next = pool->avail[kval].next;
+     pool->avail[kval].next->prev = block;
+     pool->avail[kval].next = block;
+ } 
 
 /**
  * Initialize a new memory pool using the buddy algorithm

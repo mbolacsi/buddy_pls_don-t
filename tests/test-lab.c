@@ -134,6 +134,110 @@ void test_buddy_init(void)
 }
 
 
+// MINE:
+
+/**
+ * Test multiple small allocations from a larger pool and free them
+ * in reverse order to force merging.
+ */
+ void test_buddy_malloc_multiple(void)
+ {
+   fprintf(stderr, "->Test multiple allocations and frees\n");
+   struct buddy_pool pool;
+   // Use a larger pool (e.g. size = 1 << DEFAULT_K).
+   size_t size = UINT64_C(1) << DEFAULT_K;
+   buddy_init(&pool, size);
+ 
+   const int num_allocs = 10;
+   void *ptrs[num_allocs];
+ 
+   // Allocate several small blocks.
+   for (int i = 0; i < num_allocs; i++)
+   {
+     // Allocate 16 bytes (plus metadata will force splitting).
+     ptrs[i] = buddy_malloc(&pool, 16);
+     TEST_ASSERT_NOT_NULL(ptrs[i]);
+   }
+ 
+   // Free the blocks in reverse order.
+   for (int i = num_allocs - 1; i >= 0; i--)
+   {
+     buddy_free(&pool, ptrs[i]);
+   }
+ 
+   check_buddy_pool_full(&pool);
+   buddy_destroy(&pool);
+ }
+
+ /**
+ * Test random allocations and frees to stress the allocator.
+ */
+void test_buddy_random_alloc_free(void)
+{
+  fprintf(stderr, "->Test random allocations and frees\n");
+  struct buddy_pool pool;
+  size_t size = UINT64_C(1) << DEFAULT_K;
+  buddy_init(&pool, size);
+
+  #define NUM_ITER 100
+  #define MAX_ALLOC_SIZE 128  // Maximum request size (in bytes)
+
+  void *allocs[NUM_ITER];
+  // Initialize the allocation array.
+  for (int i = 0; i < NUM_ITER; i++) {
+    allocs[i] = NULL;
+  }
+
+  // Perform a series of allocations.
+  for (int i = 0; i < NUM_ITER; i++)
+  {
+    size_t alloc_size = (rand() % MAX_ALLOC_SIZE) + 1;
+    allocs[i] = buddy_malloc(&pool, alloc_size);
+    // It's acceptable for allocations to eventually fail if the pool is exhausted.
+    if (allocs[i] == NULL)
+      break;
+  }
+
+  // Free all non-null allocated pointers.
+  for (int i = 0; i < NUM_ITER; i++)
+  {
+    if (allocs[i] != NULL)
+      buddy_free(&pool, allocs[i]);
+  }
+
+  check_buddy_pool_full(&pool);
+  buddy_destroy(&pool);
+}
+
+/**
+ * Test that a request for 0 bytes fails.
+ */
+ void test_buddy_alloc_zero(void)
+ {
+   fprintf(stderr, "->Test allocation of 0 bytes\n");
+   struct buddy_pool pool;
+   size_t size = UINT64_C(1) << DEFAULT_K;
+   buddy_init(&pool, size);
+   void *mem = buddy_malloc(&pool, 0);
+   TEST_ASSERT_NULL(mem);
+   buddy_destroy(&pool);
+ }
+
+ /**
+ * Test that freeing a NULL pointer does nothing.
+ */
+void test_buddy_invalid_free(void)
+{
+  fprintf(stderr, "->Test freeing a NULL pointer\n");
+  struct buddy_pool pool;
+  size_t size = UINT64_C(1) << DEFAULT_K;
+  buddy_init(&pool, size);
+  // Should not crash or alter the pool.
+  buddy_free(&pool, NULL);
+  check_buddy_pool_full(&pool);
+  buddy_destroy(&pool);
+}
+
 int main(void) {
   time_t t;
   unsigned seed = (unsigned)time(&t);
@@ -145,5 +249,9 @@ int main(void) {
   RUN_TEST(test_buddy_init);
   RUN_TEST(test_buddy_malloc_one_byte);
   RUN_TEST(test_buddy_malloc_one_large);
+  RUN_TEST(test_buddy_malloc_multiple);
+  RUN_TEST(test_buddy_random_alloc_free);
+  RUN_TEST(test_buddy_alloc_zero);
+  RUN_TEST(test_buddy_invalid_free);
 return UNITY_END();
 }
