@@ -222,6 +222,28 @@ void test_buddy_random_alloc_free(void)
    TEST_ASSERT_NULL(mem);
    buddy_destroy(&pool);
  }
+ 
+ void test_buddy_edge_cases(void)
+ {
+    fprintf(stderr, "->Testing edge cases\n");
+    struct buddy_pool pool;
+    size_t kval = MIN_K;
+    size_t size = UINT64_C(1) << kval;
+    buddy_init(&pool, size);
+    // Test allocating 0 bytes
+    void *mem1 = buddy_malloc(&pool, 0);
+    assert(mem1 == NULL);
+    // Test freeing NULL
+    buddy_free(&pool, NULL);
+    // Pool should still be full
+    check_buddy_pool_full(&pool);
+    // Test freeing an invalid pointer
+    char dummy[10];
+    buddy_free(&pool, dummy);
+    // Pool should still be full
+    check_buddy_pool_full(&pool);
+    buddy_destroy(&pool);
+}
 
  /**
  * Test that freeing a NULL pointer does nothing.
@@ -253,5 +275,6 @@ int main(void) {
   RUN_TEST(test_buddy_random_alloc_free);
   RUN_TEST(test_buddy_alloc_zero);
   RUN_TEST(test_buddy_invalid_free);
+  RUN_TEST(test_buddy_edge_cases);
 return UNITY_END();
 }
